@@ -17,6 +17,7 @@
 #include "ua_session.h"
 #include "ua_subscription.h"
 
+
 static UA_StatusCode
 addNode_raw(UA_Server *server, UA_NodeClass nodeClass,
             UA_UInt32 nodeId, char *name, void *attributes,
@@ -57,6 +58,7 @@ addObjectNode(UA_Server *server, char* name, UA_UInt32 objectid,
                                    object_attr, NULL, NULL);
 }
 
+
 static UA_StatusCode
 addReferenceTypeNode(UA_Server *server, char* name, char *inverseName, UA_UInt32 referencetypeid,
                      UA_Boolean isabstract, UA_Boolean symmetric, UA_UInt32 parentid) {
@@ -74,6 +76,7 @@ addReferenceTypeNode(UA_Server *server, char* name, char *inverseName, UA_UInt32
 /***************************/
 /* Bootstrap NS0 hierarchy */
 /***************************/
+
 
 /* Creates the basic nodes which are expected by the nodeset compiler to be
  * already created. This is necessary to reduce the dependencies for the nodeset
@@ -757,6 +760,11 @@ addModellingRules(UA_Server *server) {
  * example server time. */
 UA_StatusCode
 UA_Server_initNS0(UA_Server *server) {
+
+#ifdef UA_DISABLE_INIT_NS0
+    /* Disabling INIT_NS0 as they are pre-initialized in binary nodestore */
+    return UA_STATUSCODE_GOOD;
+#endif
 
     /* Initialize base nodes which are always required an cannot be created
      * through the NS compiler */
