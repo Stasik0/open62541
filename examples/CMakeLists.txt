@@ -71,7 +71,17 @@ endmacro()
 
 add_example(tutorial_datatypes tutorial_datatypes.c)
 
+add_example(freertos_main freertos_main.c)
+set_target_properties(freertos_main PROPERTIES LINK_DEPENDS "../tools/cmake/stm32.ld")
+target_link_libraries(freertos_main freertos_kernel freertos_kernel_port freertos_kernel_include)
+set(LWIP_PATH ${PROJECT_SOURCE_DIR}/deps/lwip)
+include_directories("${LWIP_PATH}/contrib/ports/freertos/include"
+                    "${PROJECT_SOURCE_DIR}/FreeRTOS-Kernel/include"
+                    "${PROJECT_SOURCE_DIR}/deps/cmsis_rtos/"
+                    "${PROJECT_SOURCE_DIR}/FreeRTOS-Kernel/portable/GCC/ARM_CM33/non_secure")
+
 add_example(tutorial_server_firststeps tutorial_server_firststeps.c)
+set_target_properties(tutorial_server_firststeps PROPERTIES LINK_DEPENDS "../tools/cmake/stm32.ld")
 
 add_example(tutorial_server_variable tutorial_server_variable.c)
 
