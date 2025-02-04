@@ -523,6 +523,17 @@ mbedtls_createSigningRequest(mbedtls_pk_context *localPrivateKey,
         mbedtls_x509write_csr_set_key(&request, localPrivateKey);
     }
 
+    /* The private key associated with the request will be used for signing the
+     * created CSR. Enforce using RSASSA-PKCS1-v1_5 scheme. The hash_id
+     * argument is ignored when padding is set to MBEDTLS_RSA_PKCS_V15, so just
+     * set it to MBEDTLS_MD_NONE. */
+    mbedtls_rsa_context *rsaContext = mbedtls_pk_rsa(
+#if MBEDTLS_VERSION_NUMBER < 0x03000000
+        *request.key);
+#else
+        *request.private_key);
+#endif
+    mbedtls_rsa_set_padding(rsaContext, MBEDTLS_RSA_PKCS_V15, MBEDTLS_MD_NONE);
 
     unsigned char requestBuf[CSR_BUFFER_SIZE];
     memset(requestBuf, 0, sizeof(requestBuf));
@@ -561,6 +572,67 @@ UA_mbedTLS_LoadPrivateKey(const UA_ByteString *key, mbedtls_pk_context *target, 
 #endif
     UA_ByteString_clear(&data);
     return mbedErr;
+}
+
+UA_StatusCode
+UA_mbedTLS_LoadCertificate(const UA_ByteString *certificate, mbedtls_x509_crt *target) {
+    const unsigned char *pData = certificate->data;
+
+    if(certificate->length > 1 && pData[0] == 0x30 && pData[1] == 0x82) { // Magic number for DER encoded files
+        return UA_mbedTLS_LoadDerCertificate(certificate, target);
+    }
+    return UA_mbedTLS_LoadPemCertificate(certificate, target);
+}
+
+UA_StatusCode
+UA_mbedTLS_LoadDerCertificate(const UA_ByteString *certificate, mbedtls_x509_crt *target) {
+    int mbedErr = mbedtls_x509_crt_parse(target, certificate->data, certificate->length);
+    if(mbedErr)
+        return UA_STATUSCODE_BADINTERNALERROR;
+
+    return UA_STATUSCODE_GOOD;
+}
+
+UA_StatusCode
+UA_mbedTLS_LoadPemCertificate(const UA_ByteString *certificate, mbedtls_x509_crt *target) {
+    UA_ByteString certificateData = UA_mbedTLS_CopyDataFormatAware(certificate);
+    int mbedErr = mbedtls_x509_crt_parse(target, certificateData.data, certificateData.length);
+    UA_ByteString_clear(&certificateData);
+    if(mbedErr)
+        return UA_STATUSCODE_BADINTERNALERROR;
+
+    return UA_STATUSCODE_GOOD;
+}
+
+UA_StatusCode
+UA_mbedTLS_LoadCrl(const UA_ByteString *crl, mbedtls_x509_crl *target) {
+    const unsigned char *pData = crl->data;
+
+    if(crl->length > 1 && pData[0] == 0x30 && pData[1] == 0x82) { // Magic number for DER encoded files
+        return UA_mbedTLS_LoadDerCrl(crl, target);
+    }
+    return UA_mbedTLS_LoadPemCrl(crl,target);
+
+}
+
+UA_StatusCode
+UA_mbedTLS_LoadDerCrl(const UA_ByteString *crl, mbedtls_x509_crl *target) {
+    int mbedErr = mbedtls_x509_crl_parse(target, crl->data, crl->length);
+    if(mbedErr)
+        return UA_STATUSCODE_BADINTERNALERROR;
+
+    return UA_STATUSCODE_GOOD;
+}
+
+UA_StatusCode
+UA_mbedTLS_LoadPemCrl(const UA_ByteString *crl, mbedtls_x509_crl *target) {
+    UA_ByteString crlData = UA_mbedTLS_CopyDataFormatAware(crl);
+    int mbedErr = mbedtls_x509_crl_parse(target, crlData.data, crlData.length);
+    UA_ByteString_clear(&crlData);
+    if(mbedErr)
+        return UA_STATUSCODE_BADINTERNALERROR;
+
+    return UA_STATUSCODE_GOOD;
 }
 
 UA_StatusCode

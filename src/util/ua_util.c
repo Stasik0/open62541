@@ -464,7 +464,6 @@ UA_KeyValueMap_remove(UA_KeyValueMap *map,
         UA_Array_resize((void**)&map->map, &map->mapSize, map->mapSize - 1,
                           &UA_TYPES[UA_TYPES_KEYVALUEPAIR]);
     (void)res;
-    map->mapSize--;
     return UA_STATUSCODE_GOOD;
 }
 
@@ -682,9 +681,13 @@ isReservedExtended(char c) {
 }
 
 char *
-find_unescaped(char *pos, char *end, UA_Boolean extended) {
+find_unescaped(char *pos, const char *end, UA_Boolean extended) {
     while(pos < end) {
+        if(*pos == 0)
+            return pos;
         if(*pos == '&') {
+            if(pos + 1 == end || pos[1] == 0)
+                return pos; /* Skip if & is the last character */
             pos += 2;
             continue;
         }
@@ -693,33 +696,22 @@ find_unescaped(char *pos, char *end, UA_Boolean extended) {
             return pos;
         pos++;
     }
-    return end;
+    return (char*)(uintptr_t)end;
 }
 
-void
-UA_String_unescape(UA_String *s, UA_Boolean extended) {
-    UA_Byte *writepos = s->data;
-    UA_Byte *end = &s->data[s->length];
-    for(UA_Byte *pos = s->data; pos < end; pos++,writepos++) {
-        UA_Boolean skip = (extended) ? isReservedExtended(*pos) : isReserved(*pos);
-        if(skip && ++pos >= end)
-            break;
+char *
+unescape(char *pos, const char *end) {
+    char *writepos = pos;
+    for(; pos < end; pos++) {
+        if(*pos == '&') {
+            pos++;
+            if(pos == end)
+                break;
+        }
         *writepos = *pos;
+        writepos++;
     }
-    s->length = (size_t)(writepos - s->data);
-}
-
-UA_StatusCode
-UA_String_append(UA_String *s, const UA_String s2) {
-    if(s2.length == 0)
-        return UA_STATUSCODE_GOOD;
-    UA_Byte *buf = (UA_Byte*)UA_realloc(s->data, s->length + s2.length);
-    if(!buf)
-        return UA_STATUSCODE_BADOUTOFMEMORY;
-    memcpy(buf + s->length, s2.data, s2.length);
-    s->data = buf;
-    s->length += s2.length;
-    return UA_STATUSCODE_GOOD;
+    return writepos;
 }
 
 UA_StatusCode
@@ -778,9 +770,11 @@ static const UA_NodeId hierarchicalRefs =
     {0, UA_NODEIDTYPE_NUMERIC, {UA_NS0ID_HIERARCHICALREFERENCES}};
 static const UA_NodeId aggregatesRefs =
     {0, UA_NODEIDTYPE_NUMERIC, {UA_NS0ID_AGGREGATES}};
+static const UA_NodeId objectsFolder =
+    {0, UA_NODEIDTYPE_NUMERIC, {UA_NS0ID_OBJECTSFOLDER}};
 
-UA_StatusCode
-UA_RelativePath_print(const UA_RelativePath *rp, UA_String *out) {
+static UA_StatusCode
+printRelativePath(const UA_RelativePath *rp, UA_String *out, UA_Boolean extEscape) {
     UA_String tmp = UA_STRING_NULL;
     UA_StatusCode res = UA_STATUSCODE_GOOD;
     for(size_t i = 0; i < rp->elementsSize && res == UA_STATUSCODE_GOOD; i++) {
@@ -803,7 +797,7 @@ UA_RelativePath_print(const UA_RelativePath *rp, UA_String *out) {
             res |= getRefTypeBrowseName(&elm->referenceTypeId, &bnBufStr);
             if(res != UA_STATUSCODE_GOOD)
                 break;
-            res |= UA_String_escapeAppend(&tmp, bnBufStr, false);
+            res |= UA_String_escapeAppend(&tmp, bnBufStr, extEscape);
             res |= UA_String_append(&tmp, UA_STRING(">"));
         }
 
@@ -815,7 +809,7 @@ UA_RelativePath_print(const UA_RelativePath *rp, UA_String *out) {
             res |= UA_String_append(&tmp, UA_STRING(nsStr));
             res |= UA_String_append(&tmp, UA_STRING(":"));
         }
-        res |= UA_String_escapeAppend(&tmp, qn->name, false);
+        res |= UA_String_escapeAppend(&tmp, qn->name, extEscape);
     }
 
     /* Encoding failed, clean up */
@@ -827,11 +821,17 @@ UA_RelativePath_print(const UA_RelativePath *rp, UA_String *out) {
     return moveTmpToOut(&tmp, out);
 }
 
+UA_StatusCode
+UA_RelativePath_print(const UA_RelativePath *rp, UA_String *out) {
+    return printRelativePath(rp, out, false);
+}
+
 static UA_NodeId baseEventTypeId = {0, UA_NODEIDTYPE_NUMERIC, {UA_NS0ID_BASEEVENTTYPE}};
 
 UA_StatusCode
 UA_SimpleAttributeOperand_print(const UA_SimpleAttributeOperand *sao,
                                 UA_String *out) {
+    UA_RelativePathElement rpe;
     UA_String tmp = UA_STRING_NULL;
     UA_StatusCode res = UA_STATUSCODE_GOOD;
 
@@ -839,47 +839,118 @@ UA_SimpleAttributeOperand_print(const UA_SimpleAttributeOperand *sao,
     if(!UA_NodeId_equal(&baseEventTypeId, &sao->typeDefinitionId)) {
         UA_Byte nodeIdBuf[512];
         UA_String nodeIdBufStr = {512, nodeIdBuf};
-        res = UA_NodeId_print(&sao->typeDefinitionId, &nodeIdBufStr);
-        if(res != UA_STATUSCODE_GOOD)
-            goto cleanup;
-        res = UA_String_escapeAppend(&tmp, nodeIdBufStr, true);
-        if(res != UA_STATUSCODE_GOOD)
-            goto cleanup;
+        res |= UA_NodeId_print(&sao->typeDefinitionId, &nodeIdBufStr);
+        res |= UA_String_escapeAppend(&tmp, nodeIdBufStr, true);
     }
 
     /* Print the BrowsePath */
+    UA_RelativePathElement_init(&rpe);
+    rpe.includeSubtypes = true;
+    rpe.referenceTypeId = hierarchicalRefs;
+    UA_RelativePath rp = {1, &rpe};
     for(size_t i = 0; i < sao->browsePathSize; i++) {
-        res |= UA_String_append(&tmp, UA_STRING("/"));
-        UA_QualifiedName *qn = &sao->browsePath[i];
-        if(qn->namespaceIndex > 0) {
-            char nsStr[8]; /* Enough for a uint16 */
-            itoaUnsigned(qn->namespaceIndex, nsStr, 10);
-            res |= UA_String_append(&tmp, UA_STRING(nsStr));
-            res |= UA_String_append(&tmp, UA_STRING(":"));
-        }
-        res |= UA_String_escapeAppend(&tmp, qn->name, true);
-        if(res != UA_STATUSCODE_GOOD)
-            goto cleanup;
+        UA_String rpstr = UA_STRING_NULL;
+        UA_assert(rpstr.data == NULL && rpstr.length == 0); /* pacify clang scan-build */
+        rpe.targetName = sao->browsePath[i];
+        res |= printRelativePath(&rp, &rpstr, true);
+        res |= UA_String_append(&tmp, rpstr);
+        UA_String_clear(&rpstr);
     }
 
     /* Print the attribute name */
     if(sao->attributeId != UA_ATTRIBUTEID_VALUE) {
+        const char *attrName = UA_AttributeId_name((UA_AttributeId)sao->attributeId);
         res |= UA_String_append(&tmp, UA_STRING("#"));
-        const char *attrName= UA_AttributeId_name((UA_AttributeId)sao->attributeId);
         res |= UA_String_append(&tmp, UA_STRING((char*)(uintptr_t)attrName));
-        if(res != UA_STATUSCODE_GOOD)
-            goto cleanup;
     }
 
-    /* Print the IndexRange
-     * TODO: Validate the indexRange string */
+    /* Print the IndexRange */
     if(sao->indexRange.length > 0) {
         res |= UA_String_append(&tmp, UA_STRING("["));
         res |= UA_String_append(&tmp, sao->indexRange);
         res |= UA_String_append(&tmp, UA_STRING("]"));
     }
 
- cleanup:
+    /* Encoding failed, clean up */
+    if(res != UA_STATUSCODE_GOOD) {
+        UA_String_clear(&tmp);
+        return res;
+    }
+
+    return moveTmpToOut(&tmp, out);
+}
+
+UA_StatusCode
+UA_AttributeOperand_print(const UA_AttributeOperand *ao,
+                          UA_String *out) {
+    UA_String tmp = UA_STRING_NULL;
+    UA_StatusCode res = UA_STATUSCODE_GOOD;
+
+    /* Print the TypeDefinitionId */
+    if(!UA_NodeId_equal(&objectsFolder, &ao->nodeId)) {
+        UA_Byte nodeIdBuf[512];
+        UA_String nodeIdBufStr = {512, nodeIdBuf};
+        res |= UA_NodeId_print(&ao->nodeId, &nodeIdBufStr);
+        res |= UA_String_escapeAppend(&tmp, nodeIdBufStr, true);
+    }
+
+    /* Print the BrowsePath */
+    UA_String rpstr = UA_STRING_NULL;
+    UA_assert(rpstr.data == NULL && rpstr.length == 0); /* pacify clang scan-build */
+    res |= printRelativePath(&ao->browsePath, &rpstr, true);
+    res |= UA_String_append(&tmp, rpstr);
+    UA_String_clear(&rpstr);
+
+    /* Print the attribute name */
+    if(ao->attributeId != UA_ATTRIBUTEID_VALUE) {
+        const char *attrName= UA_AttributeId_name((UA_AttributeId)ao->attributeId);
+        res |= UA_String_append(&tmp, UA_STRING("#"));
+        res |= UA_String_append(&tmp, UA_STRING((char*)(uintptr_t)attrName));
+    }
+
+    /* Print the IndexRange */
+    if(ao->indexRange.length > 0) {
+        res |= UA_String_append(&tmp, UA_STRING("["));
+        res |= UA_String_append(&tmp, ao->indexRange);
+        res |= UA_String_append(&tmp, UA_STRING("]"));
+    }
+
+    /* Encoding failed, clean up */
+    if(res != UA_STATUSCODE_GOOD) {
+        UA_String_clear(&tmp);
+        return res;
+    }
+
+    return moveTmpToOut(&tmp, out);
+}
+
+UA_StatusCode
+UA_ReadValueId_print(const UA_ReadValueId *rvi, UA_String *out) {
+    UA_String tmp = UA_STRING_NULL;
+    UA_StatusCode res = UA_STATUSCODE_GOOD;
+
+    /* Print the TypeDefinitionId */
+    if(!UA_NodeId_equal(&UA_NODEID_NULL, &rvi->nodeId)) {
+        UA_Byte nodeIdBuf[512];
+        UA_String nodeIdBufStr = {512, nodeIdBuf};
+        res |= UA_NodeId_print(&rvi->nodeId, &nodeIdBufStr);
+        res |= UA_String_escapeAppend(&tmp, nodeIdBufStr, true);
+    }
+
+    /* Print the attribute name */
+    if(rvi->attributeId != UA_ATTRIBUTEID_VALUE) {
+        const char *attrName= UA_AttributeId_name((UA_AttributeId)rvi->attributeId);
+        res |= UA_String_append(&tmp, UA_STRING("#"));
+        res |= UA_String_append(&tmp, UA_STRING((char*)(uintptr_t)attrName));
+    }
+
+    /* Print the IndexRange */
+    if(rvi->indexRange.length > 0) {
+        res |= UA_String_append(&tmp, UA_STRING("["));
+        res |= UA_String_append(&tmp, rvi->indexRange);
+        res |= UA_String_append(&tmp, UA_STRING("]"));
+    }
+
     /* Encoding failed, clean up */
     if(res != UA_STATUSCODE_GOOD) {
         UA_String_clear(&tmp);
@@ -1060,6 +1131,31 @@ UA_TrustListDataType_add(const UA_TrustListDataType *src, UA_TrustListDataType *
     }
 
     return retval;
+}
+
+UA_StatusCode
+UA_TrustListDataType_set(const UA_TrustListDataType *src, UA_TrustListDataType *dst) {
+    if(src->specifiedLists & UA_TRUSTLISTMASKS_TRUSTEDCERTIFICATES) {
+        UA_Array_delete(dst->trustedCertificates, dst->trustedCertificatesSize, &UA_TYPES[UA_TYPES_BYTESTRING]);
+        dst->trustedCertificates = NULL;
+        dst->trustedCertificatesSize = 0;
+    }
+    if(src->specifiedLists & UA_TRUSTLISTMASKS_TRUSTEDCRLS) {
+        UA_Array_delete(dst->trustedCrls, dst->trustedCrlsSize, &UA_TYPES[UA_TYPES_BYTESTRING]);
+        dst->trustedCrls = NULL;
+        dst->trustedCrlsSize = 0;
+    }
+    if(src->specifiedLists & UA_TRUSTLISTMASKS_ISSUERCERTIFICATES) {
+        UA_Array_delete(dst->issuerCertificates, dst->issuerCertificatesSize, &UA_TYPES[UA_TYPES_BYTESTRING]);
+        dst->issuerCertificates = NULL;
+        dst->issuerCertificatesSize = 0;
+    }
+    if(src->specifiedLists & UA_TRUSTLISTMASKS_ISSUERCRLS) {
+        UA_Array_delete(dst->issuerCrls, dst->issuerCrlsSize, &UA_TYPES[UA_TYPES_BYTESTRING]);
+        dst->issuerCrls = NULL;
+        dst->issuerCrlsSize = 0;
+    }
+    return UA_TrustListDataType_add(src, dst);
 }
 
 UA_StatusCode

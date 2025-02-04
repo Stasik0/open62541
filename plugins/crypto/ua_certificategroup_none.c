@@ -32,13 +32,16 @@ void UA_CertificateGroup_AcceptAll(UA_CertificateGroup *certGroup) {
     certGroup->setTrustList = NULL;
     certGroup->addToTrustList = NULL;
     certGroup->removeFromTrustList = NULL;
+    certGroup->getRejectedList = NULL;
+    certGroup->getCertificateCrls = NULL;
 }
 
 #ifndef UA_ENABLE_ENCRYPTION
 UA_StatusCode
 UA_CertificateUtils_verifyApplicationURI(UA_RuleHandling ruleHandling,
                                          const UA_ByteString *certificate,
-                                         const UA_String *applicationURI){
+                                         const UA_String *applicationURI,
+                                         UA_Logger *logger) {
     return UA_STATUSCODE_GOOD;
 }
 
@@ -67,8 +70,13 @@ UA_CertificateUtils_comparePublicKeys(const UA_ByteString *certificate1,
 }
 
 UA_StatusCode
-UA_CertificateUtils_ckeckKeyPair(const UA_ByteString *certificate,
+UA_CertificateUtils_checkKeyPair(const UA_ByteString *certificate,
                                  const UA_ByteString *privateKey) {
+    return UA_STATUSCODE_BADNOTSUPPORTED;
+}
+
+UA_StatusCode
+UA_CertificateUtils_checkCA(const UA_ByteString *certificate) {
     return UA_STATUSCODE_BADNOTSUPPORTED;
 }
 #endif

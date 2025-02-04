@@ -1,18 +1,25 @@
 if(MSVC)
     set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} /W1") # Reduce warnings level
+    add_compile_options(
+        $<$<CONFIG:>:/MD>
+        $<$<CONFIG:Debug>:/MDd>
+        $<$<CONFIG:Release>:/MD>
+    )    
 else()
     add_compile_options(-Wno-unused-variable -Wno-unused-function)
+    add_compile_options(-Wno-gnu-zero-variadic-macro-arguments) # silence warning for the check library
 endif()
 
-# Load CMake Packages
+# Check dependency
 find_package(Check REQUIRED)
 set(LIBS ${CHECK_LIBRARIES} ${open62541_LIBRARIES})
-if(NOT WIN32 AND NOT APPLE AND NOT (CMAKE_HOST_SYSTEM_NAME MATCHES "OpenBSD"))
+if(NOT WIN32 AND NOT APPLE AND NOT (CMAKE_HOST_SYSTEM_NAME MATCHES "OpenBSD") AND NOT (CMAKE_HOST_SYSTEM_NAME MATCHES "FreeBSD"))
   list(APPEND LIBS subunit)
 endif()
+include_directories(${CHECK_INCLUDE_DIRS})
+link_directories(${CHECK_LIBRARY_DIRS})
 
-include_directories(${CHECK_INCLUDE_DIR})
-#find_package(Threads REQUIRED)
+# Valgrind dependency
 if(NOT MSVC AND UA_ENABLE_UNIT_TESTS_MEMCHECK)
     find_package(Valgrind REQUIRED)
 endif()
@@ -101,8 +108,8 @@ macro(add_test_valgrind TEST_NAME)
             add_test(${TEST_NAME} drmemory -batch -exit_code_if_errors 1 -results_to_stderr -summary -- ${ARGN})
         else()
             set(VALGRIND_LOG ${TESTS_BINARY_DIR}/${TEST_NAME}.log)
-            set(VALGRIND_CMD valgrind --error-exitcode=1 --suppressions=${PROJECT_SOURCE_DIR}/tools/valgrind_suppressions.supp ${VALGRIND_FLAGS} --log-file=${VALGRIND_LOG} ${ARGN})
-            add_test(${TEST_NAME} ${Python3_EXECUTABLE} ${PROJECT_SOURCE_DIR}/tools/valgrind_check_error.py ${VALGRIND_LOG} ${VALGRIND_CMD})
+            set(VALGRIND_CMD valgrind --error-exitcode=1 --suppressions=${PROJECT_SOURCE_DIR}/tests/valgrind_suppressions.supp ${VALGRIND_FLAGS} --log-file=${VALGRIND_LOG} ${ARGN})
+            add_test(${TEST_NAME} ${Python3_EXECUTABLE} ${PROJECT_SOURCE_DIR}/tests/valgrind_check_error.py ${VALGRIND_LOG} ${VALGRIND_CMD})
         endif()
     else()
         add_test(${TEST_NAME} ${ARGN})
@@ -264,18 +271,17 @@ if(UA_ENABLE_PUBSUB)
     #Link libraries for executing subscriber unit test
     ua_add_test(pubsub/check_pubsub_subscribe.c)
     ua_add_test(pubsub/check_pubsub_publishspeed.c)
-    ua_add_test(pubsub/check_pubsub_config_freeze.c)
-    ua_add_test(pubsub/check_pubsub_publish_rt_levels.c)
-    ua_add_test(pubsub/check_pubsub_subscribe_config_freeze.c)
-    ua_add_test(pubsub/check_pubsub_subscribe_rt_levels.c)
-    ua_add_test(pubsub/check_pubsub_multiple_subscribe_rt_levels.c)
+
+    ua_add_test(pubsub/check_pubsub_offset.c)
+    if(UA_ARCHITECTURE_POSIX)
+        ua_add_test(pubsub/check_pubsub_custom_state_machine.c)
+    endif()
 
     if(UA_ENABLE_ENCRYPTION_MBEDTLS)
         ua_add_test(pubsub/check_pubsub_encryption.c)
         ua_add_test(pubsub/check_pubsub_encryption_aes256.c)
         ua_add_test(pubsub/check_pubsub_decryption.c)
         ua_add_test(pubsub/check_pubsub_subscribe_encrypted.c)
-        ua_add_test(pubsub/check_pubsub_encrypted_rt_levels.c)
         if(UA_ENABLE_PUBSUB_SKS)
             ua_add_test(pubsub/check_pubsub_sks_keystorage.c)
             ua_add_test(pubsub/check_pubsub_sks_push.c)
@@ -360,6 +366,10 @@ if(UA_ENABLE_ENCRYPTION)
     if(UA_ENABLE_DISCOVERY)
         ua_add_test(server/check_discovery.c)
     endif()
+
+    if(UA_ENABLE_GDS_PUSHMANAGEMENT)
+        ua_add_test(encryption/check_gds_informationmodel.c)
+    endif()
 endif()
 
 if(UA_ENABLE_ENCRYPTION_MBEDTLS)
@@ -373,6 +383,7 @@ if(UA_ENABLE_ENCRYPTION_MBEDTLS)
     ua_add_test(encryption/check_cert_generation.c)
     ua_add_test(encryption/check_csr_generation.c)
     ua_add_test(encryption/check_update_certificate.c)
+    ua_add_test(encryption/check_update_trustlist.c)
     ua_add_test(encryption/check_certificategroup.c)
 endif()
 
@@ -386,8 +397,13 @@ if(UA_ENABLE_ENCRYPTION_OPENSSL OR UA_ENABLE_ENCRYPTION_LIBRESSL)
     ua_add_test(encryption/check_cert_generation.c)
     ua_add_test(encryption/check_csr_generation.c)
     ua_add_test(encryption/check_update_certificate.c)
+    ua_add_test(encryption/check_update_trustlist.c)
     ua_add_test(encryption/check_username_connect_none.c)
     ua_add_test(encryption/check_certificategroup.c)
+endif()
+
+if(UA_ENABLE_ENCRYPTION_OPENSSL)
+    ua_add_test(encryption/check_encryption_eccnistp256.c)
 endif()
 
 # Tests for Nodeset Compiler

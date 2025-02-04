@@ -42,7 +42,7 @@ const char *logLevelNames[6] = {"trace", "debug",
 static const char *
 logCategoryNames[UA_LOGCATEGORIES] =
     {"network", "channel", "session", "server", "client",
-     "userland", "securitypolicy", "eventloop", "pubsub", "discovery"};
+     "userland", "security", "eventloop", "pubsub", "discovery"};
 
 /* Protect crosstalk during logging via global lock.
  * Use a spinlock on non-POSIX as we cannot statically initialize a global lock. */
@@ -50,7 +50,7 @@ logCategoryNames[UA_LOGCATEGORIES] =
 # ifdef UA_ARCHITECTURE_POSIX
 UA_Lock logLock = UA_LOCK_STATIC_INIT;
 # else
-void * volatile logSpinLock = NULL;
+void * logSpinLock = NULL;
 static UA_INLINE void spinLock(void) {
     while(UA_atomic_cmpxchg(&logSpinLock, NULL, (void*)0x1) != NULL) {}
 }
